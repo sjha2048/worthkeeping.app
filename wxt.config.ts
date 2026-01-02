@@ -6,7 +6,7 @@ export default defineConfig({
   manifest: {
     name: 'WorthKeeping',
     description: 'Capture what you did. Remember what mattered.',
-    permissions: ['activeTab', 'storage', 'sidePanel'],
+    permissions: ['activeTab', 'storage', 'sidePanel', 'scripting'],
     action: {
       default_title: 'Open WorthKeeping',
     },

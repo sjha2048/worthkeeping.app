@@ -34,8 +34,27 @@ export default defineBackground(() => {
         return false;
       }
 
-      await browser.tabs.sendMessage(tab.id, message);
-      return true;
+      try {
+        await browser.tabs.sendMessage(tab.id, message);
+        return true;
+      } catch (err) {
+        // Content script not loaded - inject it first
+        console.log('WorthKeeping: Content script not found, injecting...');
+        try {
+          await browser.scripting.executeScript({
+            target: { tabId: tab.id },
+            files: ['/content-scripts/content.js'],
+          });
+          // Wait a moment for script to initialize
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          // Retry sending message
+          await browser.tabs.sendMessage(tab.id, message);
+          return true;
+        } catch (injectErr) {
+          console.log('WorthKeeping: Failed to inject content script:', injectErr);
+          return false;
+        }
+      }
     } catch (err) {
       console.log('WorthKeeping: Failed to send message:', err);
       return false;
