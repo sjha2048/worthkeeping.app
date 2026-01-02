@@ -1,0 +1,20 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background circle -->
+  <circle cx="256" cy="256" r="256" fill="#3B82F6"/>
+
+  <!-- Bookmark shape -->
+  <path
+    d="M160 96C160 82.7 170.7 72 184 72H328C341.3 72 352 82.7 352 96V416C352 424.4 347.1 432 339.4 435.6C331.7 439.2 322.6 437.8 316.2 432L256 380L195.8 432C189.4 437.8 180.3 439.2 172.6 435.6C164.9 432 160 424.4 160 416V96Z"
+    fill="white"
+  />
+
+  <!-- Checkmark inside bookmark -->
+  <path
+    d="M224 240L248 264L296 200"
+    stroke="#3B82F6"
+    stroke-width="24"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    fill="none"
+  />
+</svg>

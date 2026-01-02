@@ -1,0 +1,35 @@
+{
+  "name": "worthkeeping",
+  "description": "Capture what you did. Remember what mattered.",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wxt",
+    "dev:firefox": "wxt -b firefox",
+    "build": "wxt build",
+    "build:firefox": "wxt build -b firefox",
+    "zip": "wxt zip",
+    "zip:firefox": "wxt zip -b firefox",
+    "compile": "tsc --noEmit",
+    "copy-wasm": "mkdir -p public/wasm && cp node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.wasm public/wasm/ && cp node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm public/wasm/ && cp node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.mjs public/wasm/ && cp node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs public/wasm/",
+    "postinstall": "wxt prepare && npm run copy-wasm"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.2",
+    "@ai-sdk/google": "^3.0.2",
+    "@ai-sdk/openai": "^3.0.2",
+    "@huggingface/transformers": "^3.8.1",
+    "ai": "^6.0.5",
+    "dexie": "^4.2.1",
+    "marked": "^17.0.1",
+    "solid-js": "^1.9.10"
+  },
+  "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
+    "@types/chrome": "^0.1.32",
+    "@wxt-dev/module-solid": "^1.1.4",
+    "typescript": "^5.9.3",
+    "wxt": "^0.20.6"
+  }
+}
