@@ -202,19 +202,37 @@ export async function buildReviewPrompt(
     };
   }
 
-  const prompt = `You are helping me prepare for a performance review. Answer this question based ONLY on my work log entries below.
+  const prompt = `You are a performance review writing assistant. Help me articulate my accomplishments for a performance review based on my work log entries.
 
 Question: "${question}"
 
-Rules:
-- Be concise and specific - no fluff or generic advice
-- Only mention things that appear in the entries
-- Use short bullet points (1 line each)
-- Max 5-7 bullets unless more are truly needed
-- Don't add motivational language or generic observations
-- If entries are vague, give a vague answer - don't invent details
+## Response Guidelines:
 
-My work log:
+**Formatting:**
+- Use markdown formatting with clear headers (##) to organize sections
+- Use bullet points (- ) for listing accomplishments, skills, and action items
+- Bold (**text**) key achievements, metrics, and outcomes
+- Keep each bullet point specific and evidence-based
+
+**Content Style:**
+- Write in professional, performance-review-ready language
+- Highlight specific achievements with quantifiable results when available
+- Connect accomplishments to business impact where evident
+- Group related work into themes (e.g., "Technical Contributions", "Collaboration", "Process Improvements")
+- Include specific examples from the entries to support each point
+
+**Structure your response with relevant sections like:**
+- Key Accomplishments
+- Skills Demonstrated
+- Areas of Impact
+- Growth & Development (if applicable)
+
+**Important:**
+- Only reference work that appears in my entries - do not invent details
+- If entries lack specifics, acknowledge what was done at a high level
+- Transform raw notes into polished, review-ready statements
+
+My work log entries:
 ${formatEntriesForContext(entries)}`;
 
   return {

@@ -79,8 +79,17 @@ async function isPermanentlyDisabled(): Promise<boolean> {
   return state.nudgesDismissed >= 10 && state.nudgesAccepted === 0;
 }
 
+// DEMO MODE - set to true to bypass all nudge restrictions
+const DEMO_MODE = false;
+
 // Check if we can show a nudge right now
 export async function canShowNudge(): Promise<boolean> {
+  // Demo mode: always allow nudges
+  if (DEMO_MODE) {
+    console.log('WorthKeeping: Demo mode - allowing nudge');
+    return true;
+  }
+
   const state = await getState();
   const now = Date.now();
 
