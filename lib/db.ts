@@ -10,6 +10,22 @@ export interface MemoryEntry {
   embedding?: number[]; // 384-dimensional vector from MiniLM
 }
 
+// GitHub PR data model
+export interface GitHubPR {
+  id: string; // PR node_id from GitHub
+  number: number;
+  title: string;
+  body: string; // PR description (main content for LLM)
+  url: string;
+  repo: string; // owner/repo
+  state: string; // open, closed, merged
+  mergedAt: number | null;
+  createdAt: number;
+  additions: number;
+  deletions: number;
+  fetchedAt: number; // When we fetched this PR
+}
+
 // Settings storage
 export interface Settings {
   key: string;
@@ -20,10 +36,12 @@ export interface Settings {
 const db = new Dexie('WorthKeepingDB') as Dexie & {
   entries: EntityTable<MemoryEntry, 'id'>;
   settings: EntityTable<Settings, 'key'>;
+  githubPRs: EntityTable<GitHubPR, 'id'>;
 };
 
 // Schema - indexed for time-based queries
 // Version 2 adds embedding field and settings table
+// Version 3 adds GitHub PRs table
 db.version(1).stores({
   entries: 'id, timestamp',
 });
@@ -31,6 +49,12 @@ db.version(1).stores({
 db.version(2).stores({
   entries: 'id, timestamp',
   settings: 'key',
+});
+
+db.version(3).stores({
+  entries: 'id, timestamp',
+  settings: 'key',
+  githubPRs: 'id, repo, createdAt, mergedAt',
 });
 
 export { db };
@@ -148,4 +172,40 @@ export async function setSetting(key: string, value: string): Promise<void> {
 
 export async function deleteSetting(key: string): Promise<void> {
   await db.settings.delete(key);
+}
+
+// GitHub PR helpers
+
+// Save or update a GitHub PR (upsert)
+export async function upsertGitHubPR(pr: GitHubPR): Promise<void> {
+  await db.githubPRs.put(pr);
+}
+
+// Save multiple GitHub PRs (bulk upsert)
+export async function upsertGitHubPRs(prs: GitHubPR[]): Promise<void> {
+  await db.githubPRs.bulkPut(prs);
+}
+
+// Get all GitHub PRs
+export async function getGitHubPRs(): Promise<GitHubPR[]> {
+  return db.githubPRs.orderBy('createdAt').reverse().toArray();
+}
+
+// Get GitHub PRs in a time range
+export async function getGitHubPRsInRange(startTime: number, endTime: number): Promise<GitHubPR[]> {
+  return db.githubPRs
+    .where('createdAt')
+    .between(startTime, endTime, true, true)
+    .reverse()
+    .toArray();
+}
+
+// Get GitHub PR count
+export async function getGitHubPRCount(): Promise<number> {
+  return db.githubPRs.count();
+}
+
+// Delete all GitHub PRs (for clearing data)
+export async function clearGitHubPRs(): Promise<void> {
+  await db.githubPRs.clear();
 }

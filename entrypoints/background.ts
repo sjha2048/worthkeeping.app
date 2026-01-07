@@ -10,6 +10,7 @@ import {
   getRandomNudgeMessage,
 } from '../lib/nudge';
 import { saveEntry } from '../lib/db';
+import { syncGitHubPRs, getGitHubSyncStatus, type SyncStatus } from '../lib/github';
 
 export default defineBackground(() => {
   console.log('WorthKeeping: Background script starting...');
@@ -87,7 +88,10 @@ export default defineBackground(() => {
     }
   });
 
-  // Handle messages from content script
+  // Track GitHub sync state
+  let isGitHubSyncing = false;
+
+  // Handle messages from content script and sidepanel
   browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === 'SAVE_ENTRY') {
       // Save entry in background context (has extension IndexedDB access)
@@ -110,6 +114,45 @@ export default defineBackground(() => {
     if (message.type === 'NUDGE_DISMISSED') {
       recordNudgeDismissed();
       sendResponse({ success: true });
+      return true;
+    }
+
+    // GitHub sync handlers
+    if (message.type === 'SYNC_GITHUB_PRS') {
+      if (isGitHubSyncing) {
+        sendResponse({ success: false, error: 'Sync already in progress' });
+        return true;
+      }
+
+      isGitHubSyncing = true;
+      console.log('WorthKeeping: Starting GitHub PR sync...');
+
+      syncGitHubPRs((progress) => {
+        console.log('WorthKeeping: GitHub sync -', progress);
+      })
+        .then((result) => {
+          isGitHubSyncing = false;
+          console.log('WorthKeeping: GitHub sync complete', result);
+          sendResponse(result);
+        })
+        .catch((err) => {
+          isGitHubSyncing = false;
+          console.error('WorthKeeping: GitHub sync failed', err);
+          sendResponse({ success: false, newPRs: 0, error: err.message });
+        });
+
+      return true; // Keep channel open for async response
+    }
+
+    if (message.type === 'GET_GITHUB_SYNC_STATUS') {
+      getGitHubSyncStatus()
+        .then((status) => {
+          sendResponse({ ...status, isSyncing: isGitHubSyncing });
+        })
+        .catch((err) => {
+          sendResponse({ lastSync: null, prCount: 0, isSyncing: false, error: err.message });
+        });
+
       return true;
     }
   });

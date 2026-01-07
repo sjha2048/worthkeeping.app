@@ -4,6 +4,7 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { db, getSetting, setSetting, deleteSetting, type MemoryEntry } from './db';
 import { getTimeRange } from './embeddings';
+import { getPRsForTimeRange, formatPRsForPrompt, type GitHubPR } from './github';
 
 // Supported AI providers
 export type AIProvider = 'openai' | 'anthropic' | 'google' | 'openai-compatible';
@@ -178,8 +179,9 @@ function formatEntriesForContext(entries: MemoryEntry[]): string {
 // Build prompt for review question
 export async function buildReviewPrompt(
   question: string,
-  timeRange: 'week' | 'month' | 'quarter' | 'year' | 'all'
-): Promise<{ prompt: string; entriesUsed: number }> {
+  timeRange: 'week' | 'month' | 'quarter' | 'year' | 'all',
+  includeGitHub: boolean = false
+): Promise<{ prompt: string; entriesUsed: number; prsUsed: number }> {
   // Get ALL entries in time range (not semantic search - we want everything for reviews)
   const allEntries = await db.entries.orderBy('timestamp').reverse().toArray();
 
@@ -193,16 +195,38 @@ export async function buildReviewPrompt(
     );
   }
 
-  console.log('WorthKeeping: Building review prompt with', entries.length, 'entries in', timeRange);
+  // Get GitHub PRs if enabled
+  let prs: GitHubPR[] = [];
+  if (includeGitHub) {
+    try {
+      prs = await getPRsForTimeRange(timeRange);
+    } catch (err) {
+      console.error('Failed to fetch GitHub PRs:', err);
+    }
+  }
 
-  if (entries.length === 0) {
+  console.log('WorthKeeping: Building review prompt with', entries.length, 'entries and', prs.length, 'PRs in', timeRange);
+
+  if (entries.length === 0 && prs.length === 0) {
     return {
       prompt: '',
       entriesUsed: 0,
+      prsUsed: 0,
     };
   }
 
-  const prompt = `You are a performance review writing assistant. Help me articulate my accomplishments for a performance review based on my work log entries.
+  // Build the prompt with both sources
+  let dataSection = '';
+
+  if (entries.length > 0) {
+    dataSection += `## My Work Log Entries:\n${formatEntriesForContext(entries)}\n\n`;
+  }
+
+  if (prs.length > 0) {
+    dataSection += `## My GitHub Pull Requests:\n${formatPRsForPrompt(prs)}\n`;
+  }
+
+  const prompt = `You are a performance review writing assistant. Help me articulate my accomplishments for a performance review based on my work log entries${prs.length > 0 ? ' and GitHub Pull Requests' : ''}.
 
 Question: "${question}"
 
@@ -220,6 +244,7 @@ Question: "${question}"
 - Connect accomplishments to business impact where evident
 - Group related work into themes (e.g., "Technical Contributions", "Collaboration", "Process Improvements")
 - Include specific examples from the entries to support each point
+${prs.length > 0 ? '- Reference specific PRs and their impact when relevant\n- Use lines changed metrics to demonstrate scope of work' : ''}
 
 **Structure your response with relevant sections like:**
 - Key Accomplishments
@@ -228,16 +253,16 @@ Question: "${question}"
 - Growth & Development (if applicable)
 
 **Important:**
-- Only reference work that appears in my entries - do not invent details
+- Only reference work that appears in my data - do not invent details
 - If entries lack specifics, acknowledge what was done at a high level
 - Transform raw notes into polished, review-ready statements
 
-My work log entries:
-${formatEntriesForContext(entries)}`;
+${dataSection}`;
 
   return {
     prompt,
     entriesUsed: entries.length,
+    prsUsed: prs.length,
   };
 }
 

@@ -12,6 +12,16 @@ import {
   type AIProvider,
 } from '../../lib/ai';
 import {
+  getGitHubPAT,
+  saveGitHubPAT,
+  clearGitHubPAT,
+  validateGitHubPAT,
+  getGitHubSyncStatus,
+  getPRsForTimeRange,
+  type SyncStatus,
+} from '../../lib/github';
+import { exportPRsToCSV, downloadCSV, generateExportFilename } from '../../lib/export';
+import {
   computeLocalInsights,
   parseTimeFromQuery,
   extractKeywords,
@@ -34,6 +44,7 @@ interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   entriesUsed?: number;
+  prsUsed?: number;
 }
 
 export default function App() {
@@ -66,6 +77,19 @@ export default function App() {
   const [isConfigured, setIsConfigured] = createSignal(false);
   const [isTesting, setIsTesting] = createSignal(false);
   const [testResult, setTestResult] = createSignal<'success' | 'error' | null>(null);
+
+  // GitHub state
+  const [githubPAT, setGithubPAT] = createSignal('');
+  const [isGitHubConfigured, setIsGitHubConfigured] = createSignal(false);
+  const [githubUsername, setGithubUsername] = createSignal('');
+  const [syncStatus, setSyncStatus] = createSignal<SyncStatus | null>(null);
+  const [isSyncing, setIsSyncing] = createSignal(false);
+  const [isTestingGitHub, setIsTestingGitHub] = createSignal(false);
+  const [gitHubTestResult, setGitHubTestResult] = createSignal<'success' | 'error' | null>(null);
+  const [gitHubTestError, setGitHubTestError] = createSignal<string | null>(null);
+
+  // Review view GitHub toggle
+  const [includeGitHubPRs, setIncludeGitHubPRs] = createSignal(false);
 
   // Computed insights
   const insights = createMemo(() => computeLocalInsights(entries()));
@@ -117,6 +141,20 @@ export default function App() {
       setModelStatus('ready');
       processUnembeddedEntries();
     });
+
+    // Load GitHub config and trigger auto-sync
+    const pat = await getGitHubPAT();
+    if (pat) {
+      setIsGitHubConfigured(true);
+      setGithubPAT(pat);
+
+      // Get sync status
+      const status = await getGitHubSyncStatus();
+      setSyncStatus(status);
+
+      // Auto-sync in background (non-blocking)
+      triggerGitHubSync();
+    }
 
     return () => subscription.unsubscribe();
   });
@@ -240,16 +278,23 @@ export default function App() {
     setIsStreaming(true);
 
     try {
-      // Build prompt with relevant entries
-      const { prompt, entriesUsed } = await buildReviewPrompt(question, chatTimeRange());
+      // Build prompt with relevant entries and optionally GitHub PRs
+      const { prompt, entriesUsed, prsUsed } = await buildReviewPrompt(
+        question,
+        chatTimeRange(),
+        includeGitHubPRs()
+      );
 
-      if (entriesUsed === 0) {
+      if (entriesUsed === 0 && prsUsed === 0) {
         setChatMessages((prev) => [
           ...prev,
           {
             role: 'assistant',
-            content: 'No relevant entries found for this time period. Try capturing more memories with Cmd+Shift+L.',
+            content: includeGitHubPRs()
+              ? 'No entries or PRs found for this time period. Try capturing memories with Cmd+Shift+L or sync your GitHub PRs in Settings.'
+              : 'No relevant entries found for this time period. Try capturing more memories with Cmd+Shift+L.',
             entriesUsed: 0,
+            prsUsed: 0,
           },
         ]);
         setIsStreaming(false);
@@ -257,7 +302,7 @@ export default function App() {
       }
 
       // Add empty assistant message that we'll stream into
-      setChatMessages((prev) => [...prev, { role: 'assistant', content: '', entriesUsed }]);
+      setChatMessages((prev) => [...prev, { role: 'assistant', content: '', entriesUsed, prsUsed }]);
 
       // Stream the response
       let fullContent = '';
@@ -265,7 +310,7 @@ export default function App() {
         fullContent += chunk;
         setChatMessages((prev) => {
           const updated = [...prev];
-          updated[updated.length - 1] = { role: 'assistant', content: fullContent, entriesUsed };
+          updated[updated.length - 1] = { role: 'assistant', content: fullContent, entriesUsed, prsUsed };
           return updated;
         });
       }
@@ -325,6 +370,96 @@ export default function App() {
     setTestResult(null);
   };
 
+  // GitHub handlers
+  const handleSaveGitHubPAT = async () => {
+    setIsTestingGitHub(true);
+    setGitHubTestResult(null);
+    setGitHubTestError(null);
+
+    const result = await validateGitHubPAT(githubPAT());
+
+    if (result.valid) {
+      await saveGitHubPAT(githubPAT());
+      setIsGitHubConfigured(true);
+      setGithubUsername(result.username || '');
+      setGitHubTestResult('success');
+
+      // Trigger initial sync
+      triggerGitHubSync();
+    } else {
+      setGitHubTestResult('error');
+      setGitHubTestError(result.error || 'Invalid token');
+    }
+
+    setIsTestingGitHub(false);
+  };
+
+  const handleClearGitHubPAT = async () => {
+    await clearGitHubPAT();
+    setGithubPAT('');
+    setIsGitHubConfigured(false);
+    setGithubUsername('');
+    setSyncStatus(null);
+    setGitHubTestResult(null);
+    setGitHubTestError(null);
+    setIncludeGitHubPRs(false);
+  };
+
+  const triggerGitHubSync = async () => {
+    if (isSyncing()) return;
+
+    setIsSyncing(true);
+
+    try {
+      const response = await browser.runtime.sendMessage({ type: 'SYNC_GITHUB_PRS' });
+
+      if (response.success) {
+        // Refresh sync status
+        const status = await getGitHubSyncStatus();
+        setSyncStatus(status);
+      } else if (response.error) {
+        console.error('GitHub sync error:', response.error);
+      }
+    } catch (err) {
+      console.error('Failed to sync GitHub PRs:', err);
+    }
+
+    setIsSyncing(false);
+  };
+
+  const formatLastSync = (timestamp: number | null): string => {
+    if (!timestamp) return 'Never';
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diffMs = now.getTime() - timestamp;
+    const diffMins = Math.floor(diffMs / 60000);
+
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+
+    const diffHours = Math.floor(diffMins / 60);
+    if (diffHours < 24) return `${diffHours}h ago`;
+
+    return date.toLocaleDateString();
+  };
+
+  // Export PRs to CSV
+  const handleExportPRs = async () => {
+    try {
+      const prs = await getPRsForTimeRange(chatTimeRange());
+      if (prs.length === 0) {
+        alert('No PRs to export for the selected time range.');
+        return;
+      }
+      const csv = exportPRsToCSV(prs);
+      const filename = generateExportFilename(`github-prs-${chatTimeRange()}`);
+      downloadCSV(csv, filename);
+    } catch (err) {
+      console.error('Failed to export PRs:', err);
+      alert('Failed to export PRs. Please try again.');
+    }
+  };
+
   const filteredGroups = () => Array.from(getFilteredEntries().entries());
   const isEmpty = () => filteredGroups().length === 0;
 
@@ -367,8 +502,8 @@ export default function App() {
             title="Settings"
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
               <circle cx="12" cy="12" r="3" />
-              <path d="M12 1v2m0 18v2M4.22 4.22l1.42 1.42m12.72 12.72l1.42 1.42M1 12h2m18 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
             </svg>
           </button>
         </div>
@@ -620,6 +755,22 @@ export default function App() {
             </select>
           </div>
 
+          <Show when={isGitHubConfigured()}>
+            <div class="github-toggle">
+              <label class="toggle-label">
+                <input
+                  type="checkbox"
+                  checked={includeGitHubPRs()}
+                  onChange={(e) => setIncludeGitHubPRs(e.currentTarget.checked)}
+                />
+                <span class="toggle-text">Include GitHub PRs</span>
+                <Show when={includeGitHubPRs() && syncStatus()?.prCount}>
+                  <span class="toggle-badge">{syncStatus()?.prCount} PRs</span>
+                </Show>
+              </label>
+            </div>
+          </Show>
+
           <div class="chat-messages">
             <Show when={chatMessages().length === 0}>
               <div class="chat-empty">
@@ -635,8 +786,13 @@ export default function App() {
                       class="chat-content markdown"
                       innerHTML={marked.parse(msg.content) as string}
                     />
-                    <Show when={msg.entriesUsed && msg.entriesUsed > 0}>
-                      <div class="chat-meta">Based on {msg.entriesUsed} entries</div>
+                    <Show when={(msg.entriesUsed && msg.entriesUsed > 0) || (msg.prsUsed && msg.prsUsed > 0)}>
+                      <div class="chat-meta">
+                        Based on{' '}
+                        {msg.entriesUsed ? `${msg.entriesUsed} entries` : ''}
+                        {msg.entriesUsed && msg.prsUsed ? ' + ' : ''}
+                        {msg.prsUsed ? `${msg.prsUsed} PRs` : ''}
+                      </div>
                     </Show>
                     <Show when={msg.content}>
                       <button
@@ -694,11 +850,18 @@ export default function App() {
             </button>
           </div>
 
-          <Show when={chatMessages().length > 0}>
-            <button class="clear-chat-btn" onClick={() => setChatMessages([])}>
-              Clear chat
-            </button>
-          </Show>
+          <div class="chat-footer-actions">
+            <Show when={chatMessages().length > 0}>
+              <button class="clear-chat-btn" onClick={() => setChatMessages([])}>
+                Clear chat
+              </button>
+            </Show>
+            <Show when={isGitHubConfigured() && includeGitHubPRs()}>
+              <button class="export-btn" onClick={handleExportPRs}>
+                Export PRs (CSV)
+              </button>
+            </Show>
+          </div>
         </div>
       </Show>
 
@@ -794,6 +957,77 @@ export default function App() {
             <p class="settings-desc">
               {entries().filter((e) => e.embedding).length} / {entries().length} entries embedded
             </p>
+          </div>
+
+          <div class="settings-card">
+            <h3>GitHub Integration</h3>
+            <p class="settings-desc">Import your PRs to include in performance reviews</p>
+
+            <Show when={!isGitHubConfigured()}>
+              <div class="form-group">
+                <label>Personal Access Token</label>
+                <input
+                  type="password"
+                  value={githubPAT()}
+                  onInput={(e) => setGithubPAT(e.currentTarget.value)}
+                  placeholder="ghp_xxxxxxxxxxxx"
+                />
+                <p class="settings-hint">
+                  Create a token at GitHub Settings &gt; Developer settings &gt; Personal access tokens.
+                  Needs <code>repo</code> scope for private repos.
+                </p>
+              </div>
+
+              <Show when={gitHubTestResult() === 'error'}>
+                <p class="error-msg">{gitHubTestError() || 'Invalid token'}</p>
+              </Show>
+
+              <div class="settings-actions">
+                <button
+                  class="primary-btn"
+                  onClick={handleSaveGitHubPAT}
+                  disabled={isTestingGitHub() || !githubPAT()}
+                >
+                  {isTestingGitHub() ? 'Testing...' : 'Save & Test'}
+                </button>
+              </div>
+            </Show>
+
+            <Show when={isGitHubConfigured()}>
+              <div class="github-status">
+                <div class="github-status-row">
+                  <span class="github-status-label">Status:</span>
+                  <span class="github-status-value success">Connected</span>
+                </div>
+                <Show when={githubUsername()}>
+                  <div class="github-status-row">
+                    <span class="github-status-label">User:</span>
+                    <span class="github-status-value">@{githubUsername()}</span>
+                  </div>
+                </Show>
+                <div class="github-status-row">
+                  <span class="github-status-label">PRs synced:</span>
+                  <span class="github-status-value">{syncStatus()?.prCount || 0}</span>
+                </div>
+                <div class="github-status-row">
+                  <span class="github-status-label">Last sync:</span>
+                  <span class="github-status-value">{formatLastSync(syncStatus()?.lastSync || null)}</span>
+                </div>
+              </div>
+
+              <div class="settings-actions">
+                <button
+                  class="secondary-btn"
+                  onClick={triggerGitHubSync}
+                  disabled={isSyncing()}
+                >
+                  {isSyncing() ? 'Syncing...' : 'Sync Now'}
+                </button>
+                <button class="danger-btn" onClick={handleClearGitHubPAT}>
+                  Disconnect
+                </button>
+              </div>
+            </Show>
           </div>
 
           <button class="back-btn" onClick={() => setView('insights')}>
